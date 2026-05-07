@@ -1,0 +1,264 @@
+from pathlib import Path
+
+from exopy.instrument import Instrument
+from exopy.observation import Observation, ObservationMetadata
+from exopy.star import Star
+
+
+class FakeClient:
+    def __init__(self):
+        self.property_calls = []
+        self.query_calls = []
+        self.download_calls = []
+
+    def get_star_properties(self, target):
+        self.property_calls.append(target)
+        return {"target_name": target, "teff": 5700}
+
+    def query_observations(
+        self,
+        filters,
+        file_type=None,
+        drs_version=None,
+        limit=None,
+    ):
+        self.query_calls.append(
+            {
+                "filters": filters,
+                "file_type": file_type,
+                "drs_version": drs_version,
+                "limit": limit,
+            }
+        )
+        rows = [
+            {
+                "spectrum_id": "obs-1",
+                "instrument_name": "ESPRESSO19",
+                "file_ext": "S1D_A",
+                "file_rootname": "2019-12-29/r.ESPRE.2019-12-30T00:37:39.686_S1D_A.fits",
+            },
+            {
+                "spectrum_id": "obs-2",
+                "instrument_name": "HARPS",
+                "file_ext": "CCF",
+                "file_rootname": "2020-01-02/r.HARP.2020-01-03T01:02:03.000_CCF.fits",
+            },
+        ]
+        return rows[:limit]
+
+    def download_spectroscopy(
+        self,
+        filters,
+        file_type,
+        drs_version,
+        output_directory,
+        refresh=False,
+    ):
+        self.download_calls.append(
+            {
+                "filters": filters,
+                "file_type": file_type,
+                "drs_version": drs_version,
+                "output_directory": output_directory,
+                "refresh": refresh,
+            }
+        )
+        return Path(output_directory) / "download.tar"
+
+
+class FakeCache:
+    def __init__(self, observations=None):
+        self.downloads_dir = Path("/tmp/exopy-downloads")
+        self.observations = observations or [
+            Observation(
+                metadata=ObservationMetadata(
+                    spectrum_id="obs-1",
+                    target_name="TOI178",
+                    instrument_name="ESPRESSO19",
+                )
+            )
+        ]
+        self.import_calls = []
+        self.load_calls = []
+
+    def import_products(self, path, target_name):
+        self.import_calls.append({"path": path, "target_name": target_name})
+        return self.observations
+
+    def load_observations(self, target_name):
+        self.load_calls.append(target_name)
+        return self.observations
+
+
+def test_fetch_properties_caches_result(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+
+    assert star.fetch_properties() == {"target_name": "TOI178", "teff": 5700}
+    assert star.fetch_properties() == {"target_name": "TOI178", "teff": 5700}
+
+    assert client.property_calls == ["TOI178"]
+
+
+def test_fetch_properties_refreshes_when_requested(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+
+    star.fetch_properties()
+    star.fetch_properties(refresh=True)
+
+    assert client.property_calls == ["TOI178", "TOI178"]
+
+
+def test_query_observations_builds_filters_and_stores_products(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+    instrument = Instrument(name="ESPRESSO", version="19", mode="HR", drs_version="latest")
+
+    observations = star.query_observations(instrument=instrument, file_type="s1d", limit=1)
+
+    assert len(observations) == 1
+    assert observations[0].metadata.spectrum_id == "obs-1"
+    assert observations[0].metadata.instrument_name == "ESPRESSO19"
+    assert observations[0].metadata.file_type == "S1D_A"
+    assert observations[0].metadata.headers == {
+        "spectrum_id": "obs-1",
+        "instrument_name": "ESPRESSO19",
+        "file_ext": "S1D_A",
+        "file_rootname": "2019-12-29/r.ESPRE.2019-12-30T00:37:39.686_S1D_A.fits",
+    }
+    assert star.products == [
+        {
+            "spectrum_id": "obs-1",
+            "instrument_name": "ESPRESSO19",
+            "file_ext": "S1D_A",
+            "file_rootname": "2019-12-29/r.ESPRE.2019-12-30T00:37:39.686_S1D_A.fits",
+        }
+    ]
+    assert star.observations == observations
+    assert client.query_calls == [
+        {
+            "filters": {
+                "target_name": {"equals": ["TOI178"]},
+                "instrument_name": {"equals": ["ESPRESSO19"]},
+                "instrument_mode": {"equals": ["HR"]},
+            },
+            "file_type": "s1d",
+            "drs_version": "latest",
+            "limit": 1,
+        }
+    ]
+
+
+def test_query_observations_supports_explicit_drs_version(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+
+    observations = star.query_observations(file_type="ccf", drs_version="DRS-3.3.10")
+
+    assert len(observations) == 2
+    assert client.query_calls == [
+        {
+            "filters": {"target_name": {"equals": ["TOI178"]}},
+            "file_type": "ccf",
+            "drs_version": "DRS-3.3.10",
+            "limit": None,
+        }
+    ]
+
+
+def test_product_summary_methods_use_latest_query_results(tmp_path):
+    star = Star("TOI178", cache_dir=tmp_path, client=FakeClient())
+
+    star.query_observations()
+
+    start, end = star.observation_date_range()
+    assert star.available_instruments() == ["ESPRESSO19", "HARPS"]
+    assert star.available_file_types() == ["CCF", "S1D_A"]
+    assert start.isoformat() == "2019-12-30T00:37:39.686000"
+    assert end.isoformat() == "2020-01-03T01:02:03"
+
+
+def test_products_dataframe_returns_latest_query_results(tmp_path):
+    star = Star("TOI178", cache_dir=tmp_path, client=FakeClient())
+
+    star.query_observations()
+    frame = star.products_dataframe()
+
+    assert list(frame["spectrum_id"]) == ["obs-1", "obs-2"]
+
+
+def test_query_observations_can_download_and_import_queried_products(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+    fake_cache = FakeCache()
+    star.cache = fake_cache
+
+    observations = star.query_observations(file_type="S1D_A", limit=1, download=True)
+
+    assert observations == fake_cache.observations
+    assert star.products == [
+        {
+            "spectrum_id": "obs-1",
+            "instrument_name": "ESPRESSO19",
+            "file_ext": "S1D_A",
+            "file_rootname": "2019-12-29/r.ESPRE.2019-12-30T00:37:39.686_S1D_A.fits",
+        }
+    ]
+    assert star.observations == fake_cache.observations
+    assert client.download_calls == [
+        {
+            "filters": {"spectrum_id": {"equals": ["obs-1"]}},
+            "file_type": "S1D_A",
+            "drs_version": "latest",
+            "output_directory": fake_cache.downloads_dir,
+            "refresh": False,
+        }
+    ]
+    assert fake_cache.import_calls == [
+        {
+            "path": Path("/tmp/exopy-downloads") / "download.tar",
+            "target_name": "TOI178",
+        }
+    ]
+
+
+def test_fetch_observations_downloads_and_imports_products(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client)
+    fake_cache = FakeCache()
+    star.cache = fake_cache
+    instrument = Instrument(name="ESPRESSO", version="19", drs_version="3.0")
+
+    observations = star.fetch_observations(
+        instrument=instrument,
+        file_type="s1d",
+        refresh=True,
+    )
+
+    assert observations == fake_cache.observations
+    assert star.observations == fake_cache.observations
+    assert client.download_calls[0]["drs_version"] == "3.0"
+    assert client.download_calls[0]["file_type"] == "s1d"
+    assert client.download_calls[0]["filters"] == {
+        "spectrum_id": {"equals": ["obs-1", "obs-2"]}
+    }
+    assert client.download_calls[0]["refresh"] is True
+    assert fake_cache.import_calls == [
+        {
+            "path": Path("/tmp/exopy-downloads") / "download.tar",
+            "target_name": "TOI178",
+        }
+    ]
+
+
+def test_load_cached_observations_updates_star_observations(tmp_path):
+    star = Star("TOI178", cache_dir=tmp_path, client=FakeClient())
+    fake_cache = FakeCache()
+    star.cache = fake_cache
+
+    observations = star.load_cached_observations()
+
+    assert observations == fake_cache.observations
+    assert star.observations == fake_cache.observations
+    assert fake_cache.load_calls == ["TOI178"]
