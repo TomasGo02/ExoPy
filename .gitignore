@@ -210,3 +210,4 @@ __marimo__/
 *.fits
 *.tar
 notebook_scratch/
+.vscode
