@@ -64,6 +64,8 @@ def test_hdf5_store_indexes_observations_by_target_instrument_and_date(tmp_path)
             "instrument_name": "ESPRESSO19",
             "version": "",
             "product_type": "",
+            "product_id": "",
+            "file_rootname": "",
             "date_obs": "2020-01-02T03:04:05",
             "source_path": "",
         }
