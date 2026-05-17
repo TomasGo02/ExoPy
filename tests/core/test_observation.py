@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from exopy.observation import Observation, ObservationMetadata
+from exopy.core.observation import Observation, ObservationMetadata
 
 
 def test_from_fits_loads_metadata_and_arrays(tmp_path):
@@ -20,7 +20,7 @@ def test_from_fits_loads_metadata_and_arrays(tmp_path):
     assert observation.metadata.spectrum_id == "obs-1"
     assert observation.target_name == "TOI178"
     assert observation.instrument_name == "ESPRESSO19"
-    assert observation.metadata.drs_version == "3.0"
+    assert observation.metadata.version == "3.0"
     assert observation.metadata.source_path == path
     np.testing.assert_allclose(observation.require_data().arrays["flux"], [1.0, 2.0, 3.0])
 

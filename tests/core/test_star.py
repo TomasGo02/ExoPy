@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from exopy.instrument import Instrument
-from exopy.observation import Observation, ObservationMetadata
-from exopy.star import Star
+from exopy.core.instrument import Instrument
+from exopy.core.observation import Observation, ObservationMetadata
+from exopy.core.star import Star
 
 
 class FakeClient:
@@ -11,22 +11,22 @@ class FakeClient:
         self.query_calls = []
         self.download_calls = []
 
-    def get_star_properties(self, target):
+    def get_target_properties(self, target):
         self.property_calls.append(target)
         return {"target_name": target, "teff": 5700}
 
-    def query_observations(
+    def search_products(
         self,
         filters,
-        file_type=None,
-        drs_version=None,
+        product_type=None,
+        version=None,
         limit=None,
     ):
         self.query_calls.append(
             {
                 "filters": filters,
-                "file_type": file_type,
-                "drs_version": drs_version,
+                "product_type": product_type,
+                "version": version,
                 "limit": limit,
             }
         )
@@ -46,19 +46,19 @@ class FakeClient:
         ]
         return rows[:limit]
 
-    def download_spectroscopy(
+    def download_products(
         self,
         filters,
-        file_type,
-        drs_version,
+        product_type,
+        version,
         output_directory,
         refresh=False,
     ):
         self.download_calls.append(
             {
                 "filters": filters,
-                "file_type": file_type,
-                "drs_version": drs_version,
+                "product_type": product_type,
+                "version": version,
                 "output_directory": output_directory,
                 "refresh": refresh,
             }
@@ -110,17 +110,17 @@ def test_fetch_properties_refreshes_when_requested(tmp_path):
     assert client.property_calls == ["TOI178", "TOI178"]
 
 
-def test_query_observations_builds_filters_and_stores_products(tmp_path):
+def test_search_observations_builds_filters_and_stores_products(tmp_path):
     client = FakeClient()
     star = Star("TOI178", cache_dir=tmp_path, client=client)
     instrument = Instrument(name="ESPRESSO", version="19", mode="HR", drs_version="latest")
 
-    observations = star.query_observations(instrument=instrument, file_type="s1d", limit=1)
+    observations = star.search_observations(instrument=instrument, product_type="s1d", limit=1)
 
     assert len(observations) == 1
     assert observations[0].metadata.spectrum_id == "obs-1"
     assert observations[0].metadata.instrument_name == "ESPRESSO19"
-    assert observations[0].metadata.file_type == "S1D_A"
+    assert observations[0].metadata.product_type == "S1D_A"
     assert observations[0].metadata.headers == {
         "spectrum_id": "obs-1",
         "instrument_name": "ESPRESSO19",
@@ -143,25 +143,41 @@ def test_query_observations_builds_filters_and_stores_products(tmp_path):
                 "instrument_name": {"equals": ["ESPRESSO19"]},
                 "instrument_mode": {"equals": ["HR"]},
             },
-            "file_type": "s1d",
-            "drs_version": "latest",
+            "product_type": "s1d",
+            "version": "latest",
             "limit": 1,
         }
     ]
 
 
-def test_query_observations_supports_explicit_drs_version(tmp_path):
+def test_search_observations_supports_aliases_and_date_filters(tmp_path):
+    client = FakeClient()
+    star = Star("TOI178", cache_dir=tmp_path, client=client, aliases=("TOI-178",))
+
+    star.search_observations(
+        aliases=("HD 123",),
+        start_date="2020-01-01",
+        end_date="2020-02-01",
+    )
+
+    assert client.query_calls[0]["filters"] == {
+        "target_name": {"equals": ["TOI178", "TOI-178", "HD 123"]},
+        "date_obs": {"gte": "2020-01-01", "lte": "2020-02-01"},
+    }
+
+
+def test_search_observations_supports_explicit_version(tmp_path):
     client = FakeClient()
     star = Star("TOI178", cache_dir=tmp_path, client=client)
 
-    observations = star.query_observations(file_type="ccf", drs_version="DRS-3.3.10")
+    observations = star.search_observations(product_type="ccf", version="DRS-3.3.10")
 
     assert len(observations) == 2
     assert client.query_calls == [
         {
             "filters": {"target_name": {"equals": ["TOI178"]}},
-            "file_type": "ccf",
-            "drs_version": "DRS-3.3.10",
+            "product_type": "ccf",
+            "version": "DRS-3.3.10",
             "limit": None,
         }
     ]
@@ -170,11 +186,11 @@ def test_query_observations_supports_explicit_drs_version(tmp_path):
 def test_product_summary_methods_use_latest_query_results(tmp_path):
     star = Star("TOI178", cache_dir=tmp_path, client=FakeClient())
 
-    star.query_observations()
+    star.search_observations()
 
     start, end = star.observation_date_range()
     assert star.available_instruments() == ["ESPRESSO19", "HARPS"]
-    assert star.available_file_types() == ["CCF", "S1D_A"]
+    assert star.available_product_types() == ["CCF", "S1D_A"]
     assert start.isoformat() == "2019-12-30T00:37:39.686000"
     assert end.isoformat() == "2020-01-03T01:02:03"
 
@@ -182,19 +198,19 @@ def test_product_summary_methods_use_latest_query_results(tmp_path):
 def test_products_dataframe_returns_latest_query_results(tmp_path):
     star = Star("TOI178", cache_dir=tmp_path, client=FakeClient())
 
-    star.query_observations()
+    star.search_observations()
     frame = star.products_dataframe()
 
     assert list(frame["spectrum_id"]) == ["obs-1", "obs-2"]
 
 
-def test_query_observations_can_download_and_import_queried_products(tmp_path):
+def test_search_observations_can_download_and_import_queried_products(tmp_path):
     client = FakeClient()
     star = Star("TOI178", cache_dir=tmp_path, client=client)
     fake_cache = FakeCache()
     star.cache = fake_cache
 
-    observations = star.query_observations(file_type="S1D_A", limit=1, download=True)
+    observations = star.search_observations(product_type="S1D_A", limit=1, download=True)
 
     assert observations == fake_cache.observations
     assert star.products == [
@@ -209,8 +225,8 @@ def test_query_observations_can_download_and_import_queried_products(tmp_path):
     assert client.download_calls == [
         {
             "filters": {"spectrum_id": {"equals": ["obs-1"]}},
-            "file_type": "S1D_A",
-            "drs_version": "latest",
+            "product_type": "S1D_A",
+            "version": "latest",
             "output_directory": fake_cache.downloads_dir,
             "refresh": False,
         }
@@ -232,14 +248,14 @@ def test_fetch_observations_downloads_and_imports_products(tmp_path):
 
     observations = star.fetch_observations(
         instrument=instrument,
-        file_type="s1d",
+        product_type="s1d",
         refresh=True,
     )
 
     assert observations == fake_cache.observations
     assert star.observations == fake_cache.observations
-    assert client.download_calls[0]["drs_version"] == "3.0"
-    assert client.download_calls[0]["file_type"] == "s1d"
+    assert client.download_calls[0]["version"] == "3.0"
+    assert client.download_calls[0]["product_type"] == "s1d"
     assert client.download_calls[0]["filters"] == {
         "spectrum_id": {"equals": ["obs-1", "obs-2"]}
     }

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from exopy.data import Data
+from exopy.core.data import Data
 
 
 @pytest.fixture

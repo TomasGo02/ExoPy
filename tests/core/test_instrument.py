@@ -1,6 +1,6 @@
 import pytest
 
-from exopy.instrument import Instrument
+from exopy.core.instrument import Instrument
 
 
 @pytest.mark.parametrize(

@@ -5,11 +5,13 @@ from typing import Any
 
 import numpy as np
 
-from exopy.data import Data
-from exopy.observation import Observation, ObservationMetadata
+from exopy.core.data import Data
+from exopy.ports.interfaces import StorageBackend
+from exopy.core.observation import Observation, ObservationMetadata
+from exopy.pipeline.processing import ObservationProcessor
 
 
-class HDF5Store:
+class HDF5Store(StorageBackend):
     """Persist observations in an HDF5 hierarchy.
 
     Layout:
@@ -19,9 +21,10 @@ class HDF5Store:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.processor = ObservationProcessor()
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def write_observation(self, observation: Observation) -> None:
+    def save_observation(self, observation: Observation) -> None:
         import h5py
 
         data = observation.require_data()
@@ -29,9 +32,9 @@ class HDF5Store:
         observation_id = str(metadata.spectrum_id or metadata.source_path or "unknown")
 
         with h5py.File(self.path, "a") as h5:
-            group = h5.require_group(
-                f"targets/{_safe_name(metadata.target_name)}/observations/{_safe_name(observation_id)}"
-            )
+            target_group = _safe_name(metadata.target_name)
+            observation_group = _safe_name(observation_id)
+            group = h5.require_group(f"targets/{target_group}/observations/{observation_group}")
             group.attrs.update(_hdf5_attrs(metadata))
             arrays = group.require_group("arrays")
             for name, values in data.arrays.items():
@@ -39,7 +42,7 @@ class HDF5Store:
                     del arrays[name]
                 arrays.create_dataset(name, data=np.asarray(values), compression="gzip")
 
-    def read_observations(self, target_name: str) -> list[Observation]:
+    def load_observations(self, target_name: str) -> list[Observation]:
         import h5py
 
         if not self.path.exists():
@@ -59,14 +62,50 @@ class HDF5Store:
                     spectrum_id=group.attrs.get("spectrum_id", observation_id),
                     target_name=group.attrs.get("target_name", target_name),
                     instrument_name=group.attrs.get("instrument_name", "unknown"),
-                    drs_version=group.attrs.get("drs_version"),
-                    file_type=group.attrs.get("file_type"),
+                    version=group.attrs.get("version"),
+                    product_type=group.attrs.get("product_type"),
                     headers={},
                 )
                 observations.append(
                     Observation(metadata=metadata, data=Data(arrays=arrays))
                 )
         return observations
+
+    def index_observations(
+        self,
+        target_name: str | None = None,
+        instrument_name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return stored observation metadata filtered by common dimensions."""
+        import h5py
+
+        if not self.path.exists():
+            return []
+
+        records: list[dict[str, Any]] = []
+        with h5py.File(self.path, "r") as h5:
+            targets = h5.get("targets")
+            if targets is None:
+                return []
+            for _, target_group in targets.items():
+                observations = target_group.get("observations")
+                if observations is None:
+                    continue
+                for observation_id, group in observations.items():
+                    record = {
+                        "spectrum_id": group.attrs.get("spectrum_id", observation_id),
+                        "target_name": group.attrs.get("target_name", ""),
+                        "instrument_name": group.attrs.get("instrument_name", ""),
+                        "version": group.attrs.get("version", ""),
+                        "product_type": group.attrs.get("product_type", ""),
+                        "date_obs": group.attrs.get("date_obs", ""),
+                        "source_path": group.attrs.get("source_path", ""),
+                    }
+                    if _record_matches(record, target_name, instrument_name, start_date, end_date):
+                        records.append(record)
+        return records
 
 
 def _safe_name(value: Any) -> str:
@@ -78,7 +117,31 @@ def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:
         "spectrum_id": str(metadata.spectrum_id or ""),
         "target_name": metadata.target_name,
         "instrument_name": metadata.instrument_name,
-        "drs_version": metadata.drs_version or "",
-        "file_type": metadata.file_type or "",
+        "version": metadata.version or "",
+        "product_type": metadata.product_type or "",
         "source_path": str(metadata.source_path or ""),
+        "date_obs": str(
+            metadata.headers.get("DATE-OBS")
+            or metadata.headers.get("date_obs")
+            or metadata.headers.get("date")
+            or ""
+        ),
     }
+
+
+def _record_matches(
+    record: dict[str, Any],
+    target_name: str | None,
+    instrument_name: str | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    if target_name and record.get("target_name") != target_name:
+        return False
+    if instrument_name and record.get("instrument_name") != instrument_name:
+        return False
+    if start_date and record.get("date_obs") and str(record["date_obs"]) < start_date:
+        return False
+    if end_date and record.get("date_obs") and str(record["date_obs"]) > end_date:
+        return False
+    return True

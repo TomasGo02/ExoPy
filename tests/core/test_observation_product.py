@@ -1,4 +1,4 @@
-from exopy.observation import Observation
+from exopy.core.observation import Observation
 
 
 def test_observation_from_product_wraps_dace_metadata():
@@ -17,6 +17,6 @@ def test_observation_from_product_wraps_dace_metadata():
     assert observation.metadata.spectrum_id == "75079"
     assert observation.metadata.target_name == "TOI178"
     assert observation.metadata.instrument_name == "ESPRESSO19"
-    assert observation.metadata.file_type == "S1D_A"
-    assert observation.metadata.drs_version == "3.3.10"
+    assert observation.metadata.product_type == "S1D_A"
+    assert observation.metadata.version == "3.3.10"
     assert observation.data is None

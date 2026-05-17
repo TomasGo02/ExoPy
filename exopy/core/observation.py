@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from astropy.io import fits
 
-from exopy.data import Data
+from exopy.core.data import Data
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,8 +17,8 @@ class ObservationMetadata:
     spectrum_id: int | str | None
     target_name: str
     instrument_name: str
-    drs_version: str | None = None
-    file_type: str | None = None
+    version: str | None = None
+    product_type: str | None = None
     source_path: Path | None = None
     headers: dict[str, Any] = field(default_factory=dict)
 
@@ -37,8 +37,8 @@ class Observation:
             spectrum_id=product.get("spectrum_id"),
             target_name=target_name,
             instrument_name=str(product.get("instrument_name", "unknown")),
-            drs_version=_drs_version_from_product(product),
-            file_type=product.get("file_ext") or product.get("file_type"),
+            version=_version_from_product(product),
+            product_type=product.get("file_ext") or product.get("file_type"),
             headers=dict(product),
         )
         return cls(metadata=metadata)
@@ -58,8 +58,8 @@ class Observation:
             or primary_header.get("SPECT_ID"),
             target_name=target_name or primary_header.get("OBJECT", "unknown"),
             instrument_name=primary_header.get("INSTRUME", "unknown"),
-            drs_version=primary_header.get("DRS_VER"),
-            file_type=primary_header.get("HIERARCH ESO PRO CATG"),
+            version=primary_header.get("DRS_VER"),
+            product_type=primary_header.get("HIERARCH ESO PRO CATG"),
             source_path=path,
             headers=primary_header,
         )
@@ -91,7 +91,7 @@ def _arrays_from_hdul(hdul: fits.HDUList) -> dict[str, np.ndarray]:
     return arrays
 
 
-def _drs_version_from_product(product: dict[str, Any]) -> str | None:
+def _version_from_product(product: dict[str, Any]) -> str | None:
     if product.get("drs_version"):
         return str(product["drs_version"])
 

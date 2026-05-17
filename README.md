@@ -1,23 +1,32 @@
 # ExoPy
 
-ExoPy is an object-oriented wrapper around the DACE ecosystem for fetching,
-storing, transforming, and preparing exoplanet observation data.
+ExoPy es un envoltorio orientado a objetos alrededor del ecosistema DACE para
+obtener, almacenar, transformar y preparar datos de observaciones de exoplanetas.
 
-## Project Shape
+## Estructura del Proyecto
 
 ```text
 exopy/
-  clients/
-    dace.py          # dace-query integration boundary
+  audit/
+    session.py       # sesiones de usuario y registro estructurado de eventos
+  core/
+    data.py          # envoltorio de arrays y transformaciones
+    instrument.py    # selector de instrumento
+    observation.py   # metadatos de observación y carga de FITS
+    star.py          # objeto de objetivo expuesto al usuario
+  pipeline/
+    acquisition.py   # orquestación reproducible de búsqueda y descarga
+    indexing.py      # índices de observaciones
+    processing.py    # normalización de metadatos y controles de calidad
+  ports/
+    interfaces.py    # puertos abstractos para fuentes de datos y almacenamiento
+  sources/
+    dace.py          # frontera de integración con dace-query
   storage/
-    cache.py         # downloaded product management
-    hdf5.py          # local HDF5 persistence
+    cache.py         # gestión de productos descargados
+    hdf5.py          # persistencia local en HDF5
   utils/
-    filters.py       # small DACE filter helpers
-  data.py            # Data wrapper for arrays and transforms
-  instrument.py      # Instrument selector
-  observation.py     # Observation metadata and FITS loading
-  star.py            # User-facing target object
+    filters.py       # utilidades pequeñas para filtros DACE
 docs/
   architecture.md
 examples/
@@ -25,7 +34,7 @@ examples/
 tests/
 ```
 
-## Example
+## Ejemplo
 
 ```python
 from exopy import Instrument, Star
@@ -34,21 +43,21 @@ star = Star("TOI178")
 instrument = Instrument(name="ESPRESSO", version="19", drs_version="latest")
 
 properties = star.fetch_properties()
-observations = star.query_observations(
+observations = star.search_observations(
     instrument=instrument,
-    file_type="S1D_A",
+    product_type="S1D_A",
     limit=1,
     download=True,
 )
 
 print(star.available_instruments())
-print(star.available_file_types())
+print(star.available_product_types())
 print(star.observation_date_range())
 print(observations)
 print(star.products)
 ```
 
-## Development
+## Desarrollo
 
 ```bash
 python -m pip install -e ".[dev]"

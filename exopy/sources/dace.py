@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from exopy.exceptions import DaceClientError
+from exopy.core.exceptions import DaceClientError
+from exopy.ports.interfaces import DataSourceConnector
 
 
-class DaceClient:
+class DaceClient(DataSourceConnector):
     """Thin boundary around ``dace-query``.
 
     Keeping DACE calls here makes the domain objects easy to test and gives the
     project one place to absorb API changes.
     """
 
-    def get_star_properties(self, target: str) -> dict[str, Any]:
+    def get_target_properties(self, target: str) -> dict[str, Any]:
         """Fetch stellar metadata.
 
         TODO: Wire this to the relevant DACE target/catalog endpoint once the
@@ -21,23 +22,22 @@ class DaceClient:
         """
         return {"target_name": target}
 
-    def query_observations(
+    def search_products(
         self,
-        filters: dict[str, Any],
-        file_type: str | list[str] | None = None,
-        drs_version: str | list[str] | None = None,
+        filters: Mapping[str, Any],
+        product_type: str | list[str] | None = None,
+        version: str | list[str] | None = None,
         limit: int | None = None,
-        output_format: str = "dict",
     ) -> list[dict[str, Any]]:
-        """List available spectroscopy products from DACE without downloading."""
+        """List available products from DACE without downloading."""
         try:
             from dace_query.spectroscopy import Spectroscopy
 
             result = Spectroscopy.browse_products(
                 filters=filters,
-                file_type=file_type,
-                drs_version=drs_version,
-                output_format=output_format,
+                file_type=product_type,
+                drs_version=version,
+                output_format="dict",
             )
         except Exception as exc:  # pragma: no cover - depends on remote service
             msg = "Could not browse DACE spectroscopy products."
@@ -48,23 +48,23 @@ class DaceClient:
             return rows
         return rows[:limit]
 
-    def download_spectroscopy(
+    def download_products(
         self,
-        filters: dict[str, Any],
-        file_type: str,
-        drs_version: str,
+        filters: Mapping[str, Any],
+        product_type: str,
+        version: str,
         output_directory: Path,
         refresh: bool = False,
     ) -> Path:
-        """Download reduced spectroscopy products from DACE."""
+        """Download matching products from DACE."""
         output_directory.mkdir(parents=True, exist_ok=True)
         try:
             from dace_query.spectroscopy import Spectroscopy
 
             downloaded = Spectroscopy.download(
-                file_type=file_type,
+                file_type=product_type,
                 filters=filters,
-                drs_version=drs_version,
+                drs_version=version,
                 output_directory=str(output_directory),
             )
         except Exception as exc:  # pragma: no cover - depends on remote service

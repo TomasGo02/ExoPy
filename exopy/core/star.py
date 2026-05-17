@@ -6,9 +6,11 @@ from pathlib import Path
 import re
 from typing import Any
 
-from exopy.clients.dace import DaceClient
-from exopy.instrument import Instrument
-from exopy.observation import Observation
+from exopy.audit import AuditLogger
+from exopy.sources.dace import DaceClient
+from exopy.ports.interfaces import DataSourceConnector, StorageBackend
+from exopy.core.instrument import Instrument
+from exopy.core.observation import Observation
 from exopy.storage.cache import Cache
 
 
@@ -18,37 +20,68 @@ class Star:
 
     name: str
     cache_dir: Path | str = ".exopy"
-    client: DaceClient = field(default_factory=DaceClient)
+    client: DataSourceConnector = field(default_factory=DaceClient)
+    aliases: tuple[str, ...] = ()
+    storage_backend: StorageBackend | None = None
+    audit_logger: AuditLogger = field(default_factory=AuditLogger)
     cache: Cache = field(init=False)
     properties: dict[str, Any] | None = field(default=None, init=False)
     products: list[dict[str, Any]] = field(default_factory=list, init=False)
     observations: list[Observation] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
-        self.cache = Cache(Path(self.cache_dir))
+        self.cache = Cache(Path(self.cache_dir), store=self.storage_backend)
 
     def fetch_properties(self, refresh: bool = False) -> dict[str, Any]:
         """Fetch and cache stellar properties from DACE."""
         if self.properties is None or refresh:
-            self.properties = self.client.get_star_properties(self.name)
+            try:
+                self.properties = self.client.get_target_properties(self.name)
+            except Exception as exc:
+                self.audit_logger.record("properties_error", target=self.name, error=str(exc))
+                raise
+            self.audit_logger.record("properties", target=self.name)
         return self.properties
 
-    def query_observations(
+    def search_observations(
         self,
         instrument: Instrument | None = None,
-        file_type: str | list[str] | None = None,
-        drs_version: str | list[str] | None = None,
+        product_type: str | list[str] | None = None,
+        version: str | list[str] | None = None,
         limit: int | None = None,
+        aliases: list[str] | tuple[str, ...] | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
         download: bool = False,
         refresh: bool = False,
     ) -> list[Observation]:
-        """Query available DACE products, store them, and optionally download them."""
-        filters = self._filters(instrument)
-        self.products = self.client.query_observations(
+        """Search available products, store metadata, and optionally download them."""
+        filters = self._filters(
+            instrument,
+            aliases=aliases,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        try:
+            self.products = self.client.search_products(
+                filters=filters,
+                product_type=product_type,
+                version=version or (instrument.drs_version if instrument else None),
+                limit=limit,
+            )
+        except Exception as exc:
+            self.audit_logger.record(
+                "search_error",
+                target=self.name,
+                filters=filters,
+                error=str(exc),
+            )
+            raise
+        self.audit_logger.record(
+            "search",
+            target=self.name,
             filters=filters,
-            file_type=file_type,
-            drs_version=drs_version or (instrument.drs_version if instrument else None),
-            limit=limit,
+            rows=len(self.products),
         )
         self.observations = [
             Observation.from_product(product, target_name=self.name)
@@ -56,8 +89,8 @@ class Star:
         ]
         if download:
             self._download_products(
-                file_type=file_type,
-                drs_version=drs_version or (instrument.drs_version if instrument else "latest"),
+                product_type=product_type,
+                version=version or (instrument.drs_version if instrument else "latest"),
                 refresh=refresh,
             )
         return self.observations
@@ -66,7 +99,7 @@ class Star:
         """Return sorted instrument names from the latest product query."""
         return _unique_sorted(self.products, "instrument_name")
 
-    def available_file_types(self) -> list[str]:
+    def available_product_types(self) -> list[str]:
         """Return sorted file/product types from the latest product query."""
         values: set[str] = set()
         for product in self.products:
@@ -96,14 +129,14 @@ class Star:
     def fetch_observations(
         self,
         instrument: Instrument | None = None,
-        file_type: str = "s1d",
+        product_type: str = "s1d",
         refresh: bool = False,
     ) -> list[Observation]:
         """Download products, import them into HDF5, and return observations."""
-        self.query_observations(
+        self.search_observations(
             instrument=instrument,
-            file_type=file_type,
-            drs_version=instrument.drs_version if instrument else None,
+            product_type=product_type,
+            version=instrument.drs_version if instrument else None,
             download=True,
             refresh=refresh,
         )
@@ -114,37 +147,78 @@ class Star:
         self.observations = self.cache.load_observations(self.name)
         return self.observations
 
-    def _filters(self, instrument: Instrument | None = None) -> dict[str, Any]:
+    def index_observations(
+        self,
+        instrument_name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return indexed cached observations for this target."""
+        return self.cache.index_observations(
+            target_name=self.name,
+            instrument_name=instrument_name,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def _filters(
+        self,
+        instrument: Instrument | None = None,
+        aliases: list[str] | tuple[str, ...] | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
+    ) -> dict[str, Any]:
+        target_names = [self.name, *self.aliases, *(aliases or ())]
         filters: dict[str, Any] = {
-            "target_name": {"equals": [self.name]},
+            "target_name": {"equals": target_names},
         }
         if instrument:
             filters.update(instrument.as_filters())
+        if start_date or end_date:
+            date_filter: dict[str, str] = {}
+            if start_date:
+                date_filter["gte"] = _date_filter_value(start_date)
+            if end_date:
+                date_filter["lte"] = _date_filter_value(end_date)
+            filters["date_obs"] = date_filter
         return filters
 
     def _download_products(
         self,
-        file_type: str | list[str] | None,
-        drs_version: str | list[str] | None,
+        product_type: str | list[str] | None,
+        version: str | list[str] | None,
         refresh: bool,
     ) -> None:
         if not self.products:
             self.observations = []
             return
 
-        resolved_file_type = _resolve_file_type(file_type, self.products)
-        resolved_drs_version = _resolve_drs_version(drs_version)
+        resolved_product_type = _resolve_product_type(product_type, self.products)
+        resolved_version = _resolve_version(version)
         filters = _download_filters(self.products)
-        download_path = self.client.download_spectroscopy(
+        download_path = self.client.download_products(
             filters=filters,
-            file_type=resolved_file_type,
-            drs_version=resolved_drs_version,
+            product_type=resolved_product_type,
+            version=resolved_version,
             output_directory=self.cache.downloads_dir,
             refresh=refresh,
+        )
+        self.audit_logger.record(
+            "download",
+            target=self.name,
+            filters=filters,
+            product_type=resolved_product_type,
+            version=resolved_version,
+            path=download_path,
         )
         self.observations = self.cache.import_products(
             download_path,
             target_name=self.name,
+        )
+        self.audit_logger.record(
+            "conversion",
+            target=self.name,
+            observations=len(self.observations),
         )
 
 
@@ -163,14 +237,14 @@ def _download_filters(products: list[dict[str, Any]]) -> dict[str, dict[str, lis
     raise ValueError(msg)
 
 
-def _resolve_file_type(
-    file_type: str | list[str] | None,
+def _resolve_product_type(
+    product_type: str | list[str] | None,
     products: list[dict[str, Any]],
 ) -> str:
-    if isinstance(file_type, str):
-        return file_type
-    if isinstance(file_type, list) and len(file_type) == 1:
-        return file_type[0]
+    if isinstance(product_type, str):
+        return product_type
+    if isinstance(product_type, list) and len(product_type) == 1:
+        return product_type[0]
     values = {
         str(value)
         for product in products
@@ -179,18 +253,18 @@ def _resolve_file_type(
     }
     if len(values) == 1:
         return next(iter(values))
-    msg = "Pass a single file_type when downloading observations."
+    msg = "Pass a single product_type when downloading observations."
     raise ValueError(msg)
 
 
-def _resolve_drs_version(drs_version: str | list[str] | None) -> str:
-    if drs_version is None:
+def _resolve_version(version: str | list[str] | None) -> str:
+    if version is None:
         return "latest"
-    if isinstance(drs_version, str):
-        return drs_version
-    if len(drs_version) == 1:
-        return drs_version[0]
-    msg = "Pass a single drs_version when downloading observations."
+    if isinstance(version, str):
+        return version
+    if len(version) == 1:
+        return version[0]
+    msg = "Pass a single version when downloading observations."
     raise ValueError(msg)
 
 
@@ -224,3 +298,9 @@ def _parse_datetime(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _date_filter_value(value: datetime | str) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value

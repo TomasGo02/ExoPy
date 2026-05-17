@@ -3,8 +3,9 @@ import types
 
 import pytest
 
-from exopy.clients.dace import DaceClient
-from exopy.exceptions import DaceClientError
+from exopy.sources.dace import DaceClient
+from exopy.core.exceptions import DaceClientError
+from exopy.ports.interfaces import DataSourceConnector
 
 
 class FakeSpectroscopy:
@@ -43,13 +44,13 @@ def fake_dace_query(monkeypatch):
     return FakeSpectroscopy
 
 
-def test_query_observations_uses_dace_browse_products(fake_dace_query):
+def test_search_products_uses_dace_browse_products(fake_dace_query):
     client = DaceClient()
 
-    rows = client.query_observations(
+    rows = client.search_products(
         filters={"target_name": {"equals": ["TOI178"]}},
-        file_type="s1d",
-        drs_version="latest",
+        product_type="s1d",
+        version="latest",
         limit=2,
     )
 
@@ -67,11 +68,15 @@ def test_query_observations_uses_dace_browse_products(fake_dace_query):
     ]
 
 
-def test_query_observations_wraps_dace_errors(monkeypatch, fake_dace_query):
+def test_dace_client_is_a_data_source_connector():
+    assert isinstance(DaceClient(), DataSourceConnector)
+
+
+def test_search_products_wraps_dace_errors(monkeypatch, fake_dace_query):
     def fail(**kwargs):
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(fake_dace_query, "browse_products", fail)
 
     with pytest.raises(DaceClientError, match="browse DACE spectroscopy products"):
-        DaceClient().query_observations(filters={"target_name": {"equals": ["TOI178"]}})
+        DaceClient().search_products(filters={"target_name": {"equals": ["TOI178"]}})
