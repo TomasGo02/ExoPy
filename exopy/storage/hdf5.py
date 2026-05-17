@@ -15,8 +15,8 @@ class HDF5Store(StorageBackend):
     """Persist observations in an HDF5 hierarchy.
 
     Layout:
-        /targets/{target_name}/observations/{observation_id}/arrays/{array_name}
-        /targets/{target_name}/observations/{observation_id}.attrs
+        /targets/{target_name}/instruments/{instrument_name}/dates/{date_obs}
+            /observations/{observation_id}/arrays
     """
 
     def __init__(self, path: Path) -> None:
@@ -30,12 +30,11 @@ class HDF5Store(StorageBackend):
         data = observation.require_data()
         metadata = observation.metadata
         observation_id = str(metadata.spectrum_id or metadata.source_path or "unknown")
+        attrs = _hdf5_attrs(metadata)
 
         with h5py.File(self.path, "a") as h5:
-            target_group = _safe_name(metadata.target_name)
-            observation_group = _safe_name(observation_id)
-            group = h5.require_group(f"targets/{target_group}/observations/{observation_group}")
-            group.attrs.update(_hdf5_attrs(metadata))
+            group = h5.require_group(_observation_path(attrs, observation_id))
+            group.attrs.update(attrs)
             arrays = group.require_group("arrays")
             for name, values in data.arrays.items():
                 if name in arrays:
@@ -50,29 +49,13 @@ class HDF5Store(StorageBackend):
 
         observations: list[Observation] = []
         with h5py.File(self.path, "r") as h5:
-            root_path = f"targets/{_safe_name(target_name)}/observations"
-            if root_path not in h5:
+            root_path = f"targets/{_safe_name(target_name)}"
+            root = h5.get(root_path)
+            if root is None:
                 return []
 
-            for observation_id, group in h5[root_path].items():
-                arrays = {
-                    name: dataset[()] for name, dataset in group["arrays"].items()
-                }
-                metadata = ObservationMetadata(
-                    spectrum_id=group.attrs.get("spectrum_id", observation_id),
-                    target_name=group.attrs.get("target_name", target_name),
-                    instrument_name=group.attrs.get("instrument_name", "unknown"),
-                    version=group.attrs.get("version"),
-                    product_type=group.attrs.get("product_type"),
-                    headers={
-                        "product_id": group.attrs.get("product_id", ""),
-                        "file_rootname": group.attrs.get("file_rootname", ""),
-                        "date_obs": group.attrs.get("date_obs", ""),
-                    },
-                )
-                observations.append(
-                    Observation(metadata=metadata, data=Data(arrays=arrays))
-                )
+            for observation_id, group in _iter_observation_groups(root):
+                observations.append(_observation_from_group(observation_id, group, target_name))
         return observations
 
     def index_observations(
@@ -94,21 +77,8 @@ class HDF5Store(StorageBackend):
             if targets is None:
                 return []
             for _, target_group in targets.items():
-                observations = target_group.get("observations")
-                if observations is None:
-                    continue
-                for observation_id, group in observations.items():
-                    record = {
-                        "spectrum_id": group.attrs.get("spectrum_id", observation_id),
-                        "target_name": group.attrs.get("target_name", ""),
-                        "instrument_name": group.attrs.get("instrument_name", ""),
-                        "version": group.attrs.get("version", ""),
-                        "product_type": group.attrs.get("product_type", ""),
-                        "product_id": group.attrs.get("product_id", ""),
-                        "file_rootname": group.attrs.get("file_rootname", ""),
-                        "date_obs": group.attrs.get("date_obs", ""),
-                        "source_path": group.attrs.get("source_path", ""),
-                    }
+                for observation_id, group in _iter_observation_groups(target_group):
+                    record = _record_from_group(observation_id, group)
                     if _record_matches(record, target_name, instrument_name, start_date, end_date):
                         records.append(record)
         return records
@@ -116,6 +86,69 @@ class HDF5Store(StorageBackend):
 
 def _safe_name(value: Any) -> str:
     return str(value).replace("/", "_")
+
+
+def _observation_path(attrs: dict[str, str], observation_id: str) -> str:
+    return (
+        f"targets/{_safe_name(attrs['target_name'])}"
+        f"/instruments/{_safe_name(attrs['instrument_name'] or 'unknown')}"
+        f"/dates/{_safe_name(attrs['date_obs'] or 'unknown')}"
+        f"/observations/{_safe_name(observation_id)}"
+    )
+
+
+def _iter_observation_groups(root: Any):
+    instruments = root.get("instruments")
+    if instruments is not None:
+        for _, instrument_group in instruments.items():
+            dates = instrument_group.get("dates")
+            if dates is None:
+                continue
+            for _, date_group in dates.items():
+                observations = date_group.get("observations")
+                if observations is None:
+                    continue
+                yield from observations.items()
+        return
+
+    observations = root.get("observations")
+    if observations is not None:
+        yield from observations.items()
+
+
+def _observation_from_group(
+    observation_id: str,
+    group: Any,
+    fallback_target_name: str,
+) -> Observation:
+    arrays = {name: dataset[()] for name, dataset in group["arrays"].items()}
+    metadata = ObservationMetadata(
+        spectrum_id=group.attrs.get("spectrum_id", observation_id),
+        target_name=group.attrs.get("target_name", fallback_target_name),
+        instrument_name=group.attrs.get("instrument_name", "unknown"),
+        version=group.attrs.get("version"),
+        product_type=group.attrs.get("product_type"),
+        headers={
+            "product_id": group.attrs.get("product_id", ""),
+            "file_rootname": group.attrs.get("file_rootname", ""),
+            "date_obs": group.attrs.get("date_obs", ""),
+        },
+    )
+    return Observation(metadata=metadata, data=Data(arrays=arrays))
+
+
+def _record_from_group(observation_id: str, group: Any) -> dict[str, Any]:
+    return {
+        "spectrum_id": group.attrs.get("spectrum_id", observation_id),
+        "target_name": group.attrs.get("target_name", ""),
+        "instrument_name": group.attrs.get("instrument_name", ""),
+        "version": group.attrs.get("version", ""),
+        "product_type": group.attrs.get("product_type", ""),
+        "product_id": group.attrs.get("product_id", ""),
+        "file_rootname": group.attrs.get("file_rootname", ""),
+        "date_obs": group.attrs.get("date_obs", ""),
+        "source_path": group.attrs.get("source_path", ""),
+    }
 
 
 def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:

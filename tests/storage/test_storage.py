@@ -37,6 +37,29 @@ def test_hdf5_store_round_trips_observation(tmp_path):
     np.testing.assert_allclose(loaded[0].require_data().arrays["flux"], [1.0, 2.0, 3.0])
 
 
+def test_hdf5_store_groups_by_target_instrument_and_datetime(tmp_path):
+    store = HDF5Store(tmp_path / "observations.h5")
+    observation = Observation(
+        metadata=ObservationMetadata(
+            spectrum_id="obs-1",
+            target_name="TOI178",
+            instrument_name="ESPRESSO19",
+            product_type="S1D_A",
+            headers={"DATE-OBS": "2020-01-02T03:04:05"},
+        ),
+        data=Data(arrays={"flux": np.array([1.0])}),
+    )
+
+    store.save_observation(observation)
+
+    with h5py.File(store.path, "r") as h5:
+        path = (
+            "targets/TOI178/instruments/ESPRESSO19/dates/"
+            "2020-01-02T03:04:05/observations/obs-1/arrays/flux"
+        )
+        assert path in h5
+
+
 def test_hdf5_store_returns_empty_list_when_file_or_target_is_missing(tmp_path):
     store = HDF5Store(tmp_path / "observations.h5")
 
