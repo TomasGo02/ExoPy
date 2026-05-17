@@ -45,29 +45,16 @@ class Star:
 
     def search_observations(
         self,
-        instrument: Instrument | None = None,
-        product_type: str | list[str] | None = None,
-        version: str | list[str] | None = None,
-        limit: int | None = None,
-        aliases: list[str] | tuple[str, ...] | None = None,
-        start_date: datetime | str | None = None,
-        end_date: datetime | str | None = None,
-        download: bool = False,
         refresh: bool = False,
     ) -> list[Observation]:
-        """Search available products, store metadata, and optionally download them."""
-        filters = self._filters(
-            instrument,
-            aliases=aliases,
-            start_date=start_date,
-            end_date=end_date,
-        )
+        """Fetch available observation metadata into memory without downloading data."""
+        if self.products and not refresh:
+            return self.observations
+
+        filters = self._target_filters()
         try:
             self.products = self.client.search_products(
                 filters=filters,
-                product_type=product_type,
-                version=version or (instrument.drs_version if instrument else None),
-                limit=limit,
             )
         except Exception as exc:
             self.audit_logger.record(
@@ -87,38 +74,89 @@ class Star:
             Observation.from_product(product, target_name=self.name)
             for product in self.products
         ]
-        if download:
-            self._download_products(
-                product_type=product_type,
-                version=version or (instrument.drs_version if instrument else "latest"),
-                refresh=refresh,
-            )
         return self.observations
 
-    def available_instruments(self) -> list[str]:
-        """Return sorted instrument names from the latest product query."""
-        return _unique_sorted(self.products, "instrument_name")
+    def available_instruments(
+        self,
+        product_type: str | None = None,
+        version: str | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
+    ) -> list[str]:
+        """Return sorted instrument names from in-memory product metadata."""
+        products = self._filter_products(
+            self.products,
+            product_type=product_type,
+            version=version,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return _unique_sorted(products, "instrument_name")
 
-    def available_product_types(self) -> list[str]:
-        """Return sorted file/product types from the latest product query."""
+    def available_product_types(
+        self,
+        instrument: Instrument | str | None = None,
+        version: str | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
+    ) -> list[str]:
+        """Return sorted product types from in-memory product metadata."""
+        products = self._filter_products(
+            self.products,
+            instrument=instrument,
+            version=version,
+            start_date=start_date,
+            end_date=end_date,
+        )
         values: set[str] = set()
-        for product in self.products:
+        for product in products:
             for key in ("file_ext", "file_type"):
                 value = product.get(key)
                 if value:
                     values.add(str(value))
         return sorted(values)
 
-    def observation_date_range(self) -> tuple[datetime | None, datetime | None]:
-        """Return the earliest and latest observation datetimes in queried products."""
+    def observation_date_range(
+        self,
+        instrument: Instrument | str | None = None,
+        product_type: str | None = None,
+        version: str | None = None,
+    ) -> tuple[datetime | None, datetime | None]:
+        """Return earliest/latest dates from in-memory product metadata."""
+        products = self._filter_products(
+            self.products,
+            instrument=instrument,
+            product_type=product_type,
+            version=version,
+        )
         dates = [
             date
-            for product in self.products
+            for product in products
             if (date := _product_datetime(product)) is not None
         ]
         if not dates:
             return None, None
         return min(dates), max(dates)
+
+    def observation_count(
+        self,
+        instrument: Instrument | str | None = None,
+        product_type: str | None = None,
+        version: str | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
+    ) -> int:
+        """Return the number of in-memory product metadata rows."""
+        return len(
+            self._filter_products(
+                self.products,
+                instrument=instrument,
+                product_type=product_type,
+                version=version,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
 
     def products_dataframe(self):
         """Return queried products as a pandas DataFrame."""
@@ -133,13 +171,51 @@ class Star:
         refresh: bool = False,
     ) -> list[Observation]:
         """Download products, import them into HDF5, and return observations."""
-        self.search_observations(
+        return self.download_observations(
             instrument=instrument,
             product_type=product_type,
-            version=instrument.drs_version if instrument else None,
-            download=True,
             refresh=refresh,
         )
+
+    def download_observations(
+        self,
+        instrument: Instrument | str | None = None,
+        product_type: str | None = None,
+        version: str | None = None,
+        start_date: datetime | str | None = None,
+        end_date: datetime | str | None = None,
+        file_rootnames: list[str] | tuple[str, ...] | None = None,
+        refresh: bool = False,
+    ) -> list[Observation]:
+        """Return matching observations, loading cached data before downloading misses."""
+        self._require_metadata()
+        products = self._filter_products(
+            self.products,
+            instrument=instrument,
+            product_type=product_type,
+            version=version,
+            start_date=start_date,
+            end_date=end_date,
+            file_rootnames=file_rootnames,
+        )
+        if not products:
+            self.observations = []
+            return []
+
+        cached = [] if refresh else self._cached_observations_for(products)
+        missing_products = _missing_products(products, cached)
+        imported: list[Observation] = []
+        if missing_products:
+            imported = self._download_products(
+                products=missing_products,
+                product_type=product_type,
+                version=version
+                or (instrument.drs_version if isinstance(instrument, Instrument) else None),
+                refresh=refresh,
+                prefer_file_rootname=file_rootnames is not None,
+            )
+
+        self.observations = _order_observations(products, [*cached, *imported])
         return self.observations
 
     def load_cached_observations(self) -> list[Observation]:
@@ -161,41 +237,57 @@ class Star:
             end_date=end_date,
         )
 
-    def _filters(
+    def _target_filters(self) -> dict[str, Any]:
+        return {"target_name": {"equals": [self.name, *self.aliases]}}
+
+    def _filter_products(
         self,
-        instrument: Instrument | None = None,
-        aliases: list[str] | tuple[str, ...] | None = None,
+        products: list[dict[str, Any]],
+        instrument: Instrument | str | None = None,
+        product_type: str | None = None,
+        version: str | None = None,
         start_date: datetime | str | None = None,
         end_date: datetime | str | None = None,
-    ) -> dict[str, Any]:
-        target_names = [self.name, *self.aliases, *(aliases or ())]
-        filters: dict[str, Any] = {
-            "target_name": {"equals": target_names},
-        }
-        if instrument:
-            filters.update(instrument.as_filters())
-        if start_date or end_date:
-            date_filter: dict[str, str] = {}
-            if start_date:
-                date_filter["gte"] = _date_filter_value(start_date)
-            if end_date:
-                date_filter["lte"] = _date_filter_value(end_date)
-            filters["date_obs"] = date_filter
-        return filters
+        file_rootnames: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            product
+            for product in products
+            if _product_matches(
+                product,
+                instrument=instrument,
+                product_type=product_type,
+                version=version,
+                start_date=start_date,
+                end_date=end_date,
+                file_rootnames=file_rootnames,
+            )
+        ]
+
+    def _require_metadata(self) -> None:
+        if not self.products:
+            msg = "Call search_observations() before downloading observations."
+            raise ValueError(msg)
+
+    def _cached_observations_for(self, products: list[dict[str, Any]]) -> list[Observation]:
+        cached = self.cache.load_observations(self.name)
+        return [
+            observation
+            for observation in cached
+            if any(_same_product(product, observation) for product in products)
+        ]
 
     def _download_products(
         self,
-        product_type: str | list[str] | None,
-        version: str | list[str] | None,
+        products: list[dict[str, Any]],
+        product_type: str | None,
+        version: str | None,
         refresh: bool,
-    ) -> None:
-        if not self.products:
-            self.observations = []
-            return
-
-        resolved_product_type = _resolve_product_type(product_type, self.products)
+        prefer_file_rootname: bool = False,
+    ) -> list[Observation]:
+        resolved_product_type = _resolve_product_type(product_type, products)
         resolved_version = _resolve_version(version)
-        filters = _download_filters(self.products)
+        filters = _download_filters(products, prefer_file_rootname=prefer_file_rootname)
         download_path = self.client.download_products(
             filters=filters,
             product_type=resolved_product_type,
@@ -211,22 +303,154 @@ class Star:
             version=resolved_version,
             path=download_path,
         )
-        self.observations = self.cache.import_products(
+        imported = self.cache.import_products(
             download_path,
             target_name=self.name,
+            products=products,
         )
         self.audit_logger.record(
             "conversion",
             target=self.name,
-            observations=len(self.observations),
+            observations=len(imported),
         )
+        return imported
+
+
+def _product_matches(
+    product: dict[str, Any],
+    instrument: Instrument | str | None = None,
+    product_type: str | None = None,
+    version: str | None = None,
+    start_date: datetime | str | None = None,
+    end_date: datetime | str | None = None,
+    file_rootnames: list[str] | tuple[str, ...] | None = None,
+) -> bool:
+    if instrument is not None and _product_instrument(product) != _instrument_name(instrument):
+        return False
+    if product_type is not None and _product_type(product) != product_type:
+        return False
+    if version is not None and _product_version(product) != version:
+        return False
+    if file_rootnames is not None and _product_file_rootname(product) not in set(file_rootnames):
+        return False
+    observed = _product_datetime(product)
+    if start_date is not None and observed is not None and observed < _coerce_datetime(start_date):
+        return False
+    if end_date is not None and observed is not None and observed > _coerce_datetime(end_date):
+        return False
+    return True
+
+
+def _instrument_name(instrument: Instrument | str) -> str:
+    if isinstance(instrument, Instrument):
+        return instrument.dace_name
+    return instrument
+
+
+def _product_instrument(product: dict[str, Any]) -> str | None:
+    value = product.get("instrument_name")
+    return str(value) if value else None
+
+
+def _product_type(product: dict[str, Any]) -> str | None:
+    value = product.get("file_ext") or product.get("file_type")
+    return str(value) if value else None
+
+
+def _product_version(product: dict[str, Any]) -> str | None:
+    if product.get("drs_version"):
+        return str(product["drs_version"])
+    parts = [
+        product.get("version_major"),
+        product.get("version_minor"),
+        product.get("version_patch"),
+    ]
+    if all(part is not None for part in parts):
+        return ".".join(str(part) for part in parts)
+    if product.get("drs_id"):
+        return str(product["drs_id"])
+    return None
+
+
+def _product_file_rootname(product: dict[str, Any]) -> str | None:
+    value = product.get("file_rootname") or product.get("product")
+    return str(value) if value else None
+
+
+def _same_product(product: dict[str, Any], observation: Observation) -> bool:
+    product_keys = _product_keys(product)
+    observation_keys = _observation_product_keys(observation)
+    return bool(product_keys & observation_keys)
+
+
+def _product_keys(product: dict[str, Any]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for name in ("spectrum_id", "product_id", "file_rootname", "product"):
+        value = product.get(name)
+        if value:
+            keys.add((_normalized_key_name(name), str(value)))
+    return keys
+
+
+def _observation_product_keys(observation: Observation) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    metadata = observation.metadata
+    if metadata.spectrum_id:
+        keys.add(("spectrum_id", str(metadata.spectrum_id)))
+    for name in ("product_id", "file_rootname", "product"):
+        value = metadata.headers.get(name)
+        if value:
+            keys.add((_normalized_key_name(name), str(value)))
+    return keys
+
+
+def _normalized_key_name(name: str) -> str:
+    if name == "product":
+        return "file_rootname"
+    return name
+
+
+def _missing_products(
+    products: list[dict[str, Any]],
+    cached: list[Observation],
+) -> list[dict[str, Any]]:
+    return [
+        product
+        for product in products
+        if not any(_same_product(product, observation) for observation in cached)
+    ]
+
+
+def _order_observations(
+    products: list[dict[str, Any]],
+    observations: list[Observation],
+) -> list[Observation]:
+    ordered: list[Observation] = []
+    for product in products:
+        for observation in observations:
+            if _same_product(product, observation) and observation not in ordered:
+                ordered.append(observation)
+                break
+    return ordered
 
 
 def _unique_sorted(rows: list[dict[str, Any]], key: str) -> list[str]:
     return sorted({str(row[key]) for row in rows if row.get(key)})
 
 
-def _download_filters(products: list[dict[str, Any]]) -> dict[str, dict[str, list[Any]]]:
+def _download_filters(
+    products: list[dict[str, Any]],
+    prefer_file_rootname: bool = False,
+) -> dict[str, dict[str, list[Any]]]:
+    if prefer_file_rootname:
+        file_rootnames = [
+            _product_file_rootname(product)
+            for product in products
+            if _product_file_rootname(product)
+        ]
+        if file_rootnames:
+            return {"file_rootname": {"equals": file_rootnames}}
+
     spectrum_ids = [product["spectrum_id"] for product in products if product.get("spectrum_id")]
     if spectrum_ids:
         return {"spectrum_id": {"equals": spectrum_ids}}
@@ -300,7 +524,11 @@ def _parse_datetime(value: str) -> datetime | None:
         return None
 
 
-def _date_filter_value(value: datetime | str) -> str:
+def _coerce_datetime(value: datetime | str) -> datetime:
     if isinstance(value, datetime):
-        return value.isoformat()
-    return value
+        return value
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        msg = f"Could not parse datetime value: {value}"
+        raise ValueError(msg)
+    return parsed
