@@ -64,7 +64,11 @@ class HDF5Store(StorageBackend):
                     instrument_name=group.attrs.get("instrument_name", "unknown"),
                     version=group.attrs.get("version"),
                     product_type=group.attrs.get("product_type"),
-                    headers={},
+                    headers={
+                        "product_id": group.attrs.get("product_id", ""),
+                        "file_rootname": group.attrs.get("file_rootname", ""),
+                        "date_obs": group.attrs.get("date_obs", ""),
+                    },
                 )
                 observations.append(
                     Observation(metadata=metadata, data=Data(arrays=arrays))
@@ -100,6 +104,8 @@ class HDF5Store(StorageBackend):
                         "instrument_name": group.attrs.get("instrument_name", ""),
                         "version": group.attrs.get("version", ""),
                         "product_type": group.attrs.get("product_type", ""),
+                        "product_id": group.attrs.get("product_id", ""),
+                        "file_rootname": group.attrs.get("file_rootname", ""),
                         "date_obs": group.attrs.get("date_obs", ""),
                         "source_path": group.attrs.get("source_path", ""),
                     }
@@ -119,14 +125,32 @@ def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:
         "instrument_name": metadata.instrument_name,
         "version": metadata.version or "",
         "product_type": metadata.product_type or "",
+        "product_id": str(metadata.headers.get("product_id") or ""),
+        "file_rootname": str(metadata.headers.get("file_rootname") or ""),
         "source_path": str(metadata.source_path or ""),
         "date_obs": str(
             metadata.headers.get("DATE-OBS")
             or metadata.headers.get("date_obs")
             or metadata.headers.get("date")
+            or _date_from_file_rootname(metadata.headers.get("file_rootname"))
             or ""
         ),
     }
+
+
+def _date_from_file_rootname(value: Any) -> str | None:
+    if not value:
+        return None
+    import re
+
+    match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?", str(value))
+    if match:
+        return match.group(0)
+
+    match = re.search(r"\d{4}-\d{2}-\d{2}", str(value))
+    if match:
+        return match.group(0)
+    return None
 
 
 def _record_matches(

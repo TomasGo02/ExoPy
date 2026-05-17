@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import tarfile
 from pathlib import Path
+from typing import Any
 
 from exopy.core.observation import Observation
 from exopy.ports.interfaces import StorageBackend
@@ -21,12 +23,18 @@ class Cache:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.products_dir.mkdir(parents=True, exist_ok=True)
 
-    def import_products(self, path: Path, target_name: str) -> list[Observation]:
+    def import_products(
+        self,
+        path: Path,
+        target_name: str,
+        products: list[dict[str, Any]] | None = None,
+    ) -> list[Observation]:
         """Import a FITS file or archive into HDF5 and return observations."""
         fits_paths = self._materialize_products(path)
         observations = []
         for path in fits_paths:
             observation = Observation.from_fits(path, target_name=target_name)
+            observation = _with_product_metadata(observation, products or [])
             self.processor.quality_control(observation)
             observations.append(self.processor.convert(observation))
         for observation in observations:
@@ -71,3 +79,69 @@ class Cache:
                 msg = f"archive member escapes products directory: {member.name}"
                 raise ValueError(msg)
         archive.extractall(self.products_dir)
+
+
+def _with_product_metadata(
+    observation: Observation,
+    products: list[dict[str, Any]],
+) -> Observation:
+    if not products:
+        return observation
+
+    product = _matching_product(observation, products)
+    if product is None:
+        return observation
+
+    headers = {**product, **observation.metadata.headers}
+    metadata = replace(
+        observation.metadata,
+        spectrum_id=observation.metadata.spectrum_id or product.get("spectrum_id"),
+        instrument_name=observation.metadata.instrument_name
+        if observation.metadata.instrument_name != "unknown"
+        else str(product.get("instrument_name", "unknown")),
+        version=observation.metadata.version or _version_from_product(product),
+        product_type=observation.metadata.product_type
+        or product.get("file_ext")
+        or product.get("file_type"),
+        headers=headers,
+    )
+    return Observation(metadata=metadata, data=observation.data)
+
+
+def _matching_product(
+    observation: Observation,
+    products: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    spectrum_id = observation.metadata.spectrum_id
+    if spectrum_id is not None:
+        for product in products:
+            if str(product.get("spectrum_id")) == str(spectrum_id):
+                return product
+
+    source_name = observation.metadata.source_path.name if observation.metadata.source_path else ""
+    for product in products:
+        file_rootname = str(product.get("file_rootname") or product.get("product") or "")
+        if file_rootname and Path(file_rootname).name == source_name:
+            return product
+
+    if len(products) == 1:
+        return products[0]
+    return None
+
+
+def _version_from_product(product: dict[str, Any]) -> str | None:
+    if product.get("drs_version"):
+        return str(product["drs_version"])
+
+    parts = [
+        product.get("version_major"),
+        product.get("version_minor"),
+        product.get("version_patch"),
+    ]
+    if all(part is not None for part in parts):
+        return ".".join(str(part) for part in parts)
+
+    if product.get("drs_id"):
+        return str(product["drs_id"])
+
+    return None
