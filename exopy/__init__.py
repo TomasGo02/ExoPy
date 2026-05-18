@@ -2,6 +2,7 @@
 
 from exopy.pipeline.acquisition import AcquisitionConfig, AcquisitionService
 from exopy.audit import AuditLogger, UserSession, login
+from exopy.config import CONFIG_FILENAME, ExoPyConfig, load_config
 from exopy.core.data import Data
 from exopy.pipeline.indexing import ObservationIndex
 from exopy.ports.interfaces import DataSourceConnector, StorageBackend
@@ -14,8 +15,10 @@ __all__ = [
     "AcquisitionConfig",
     "AcquisitionService",
     "AuditLogger",
+    "CONFIG_FILENAME",
     "Data",
     "DataSourceConnector",
+    "ExoPyConfig",
     "Instrument",
     "Observation",
     "ObservationIndex",
@@ -25,5 +28,6 @@ __all__ = [
     "Star",
     "StorageBackend",
     "UserSession",
+    "load_config",
     "login",
 ]

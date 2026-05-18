@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from exopy.config import load_config
 from exopy.core.exceptions import DaceClientError
 from exopy.ports.interfaces import DataSourceConnector
 
@@ -13,6 +14,15 @@ class DaceClient(DataSourceConnector):
     Keeping DACE calls here makes the domain objects easy to test and gives the
     project one place to absorb API changes.
     """
+
+    def __init__(self, dace_rc_config_path: Path | str | None = None) -> None:
+        configured_path = load_config().dace_rc_config_path
+        self.dace_rc_config_path = (
+            Path(dace_rc_config_path)
+            if dace_rc_config_path is not None
+            else configured_path
+        )
+        self._spectroscopy = None
 
     def get_target_properties(self, target: str) -> dict[str, Any]:
         """Fetch stellar metadata.
@@ -31,9 +41,7 @@ class DaceClient(DataSourceConnector):
     ) -> list[dict[str, Any]]:
         """List available products from DACE without downloading."""
         try:
-            from dace_query.spectroscopy import Spectroscopy
-
-            result = Spectroscopy.browse_products(
+            result = self._spectroscopy_client().browse_products(
                 filters=filters,
                 file_type=product_type,
                 drs_version=version,
@@ -59,9 +67,7 @@ class DaceClient(DataSourceConnector):
         """Download matching products from DACE."""
         output_directory.mkdir(parents=True, exist_ok=True)
         try:
-            from dace_query.spectroscopy import Spectroscopy
-
-            downloaded = Spectroscopy.download(
+            downloaded = self._spectroscopy_client().download(
                 file_type=product_type,
                 filters=filters,
                 drs_version=version,
@@ -74,6 +80,15 @@ class DaceClient(DataSourceConnector):
         if downloaded is None:
             return output_directory
         return Path(downloaded)
+
+    def _spectroscopy_client(self):
+        if self._spectroscopy is None:
+            from dace_query import DaceClass
+            from dace_query.spectroscopy import SpectroscopyClass
+
+            dace = DaceClass(dace_rc_config_path=self.dace_rc_config_path)
+            self._spectroscopy = SpectroscopyClass(dace_instance=dace)
+        return self._spectroscopy
 
 
 def _rows_from_dace_result(result: Any) -> list[dict[str, Any]]:

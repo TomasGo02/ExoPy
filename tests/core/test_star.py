@@ -99,6 +99,30 @@ def test_fetch_properties_caches_result(tmp_path):
     assert client.property_calls == ["TOI178"]
 
 
+def test_star_uses_configured_cache_dir_when_cache_dir_is_omitted(tmp_path, monkeypatch):
+    (tmp_path / "exopy_config.toml").write_text(
+        '[storage]\npersistent_data_dir = "configured-cache"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    star = Star("TOI178", client=FakeClient())
+
+    assert star.cache.root == tmp_path / "configured-cache"
+
+
+def test_star_explicit_cache_dir_overrides_config(tmp_path, monkeypatch):
+    (tmp_path / "exopy_config.toml").write_text(
+        'persistent_data_dir = "configured-cache"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    star = Star("TOI178", cache_dir=tmp_path / "explicit-cache", client=FakeClient())
+
+    assert star.cache.root == tmp_path / "explicit-cache"
+
+
 def test_fetch_properties_refreshes_when_requested(tmp_path):
     client = FakeClient()
     star = Star("TOI178", cache_dir=tmp_path, client=client)

@@ -64,6 +64,27 @@ print(metadata)
 print(observations)
 ```
 
+## Configuración
+
+ExoPy puede configurarse con un archivo `exopy_config.toml` en el directorio de
+trabajo. Si el archivo no existe, los datos persistentes se guardan en `.exopy`
+dentro del directorio actual.
+
+```toml
+[storage]
+persistent_data_dir = "datos/exopy"
+
+[dace]
+dace_rc_config_path = "credenciales/.dacerc"
+```
+
+También se puede declarar en el nivel superior:
+
+```toml
+persistent_data_dir = "datos/exopy"
+dace_rc_config_path = "credenciales/.dacerc"
+```
+
 ## Desarrollo
 
 ```bash

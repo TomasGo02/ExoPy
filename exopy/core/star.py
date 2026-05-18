@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from exopy.audit import AuditLogger
+from exopy.config import load_config
 from exopy.sources.dace import DaceClient
 from exopy.ports.interfaces import DataSourceConnector, StorageBackend
 from exopy.core.instrument import Instrument
@@ -19,7 +20,7 @@ class Star:
     """High-level object users create to work with one stellar target."""
 
     name: str
-    cache_dir: Path | str = ".exopy"
+    cache_dir: Path | str | None = None
     client: DataSourceConnector = field(default_factory=DaceClient)
     aliases: tuple[str, ...] = ()
     storage_backend: StorageBackend | None = None
@@ -30,7 +31,12 @@ class Star:
     observations: list[Observation] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
-        self.cache = Cache(Path(self.cache_dir), store=self.storage_backend)
+        cache_dir = (
+            Path(self.cache_dir)
+            if self.cache_dir is not None
+            else load_config().persistent_data_dir
+        )
+        self.cache = Cache(cache_dir, store=self.storage_backend)
 
     def fetch_properties(self, refresh: bool = False) -> dict[str, Any]:
         """Fetch and cache stellar properties from DACE."""
