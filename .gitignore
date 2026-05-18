@@ -212,3 +212,5 @@ __marimo__/
 notebook_scratch/
 .vscode/
 .exopy/
+test.py
+test.ipynb
