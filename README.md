@@ -42,14 +42,13 @@ from exopy import Instrument, Star
 star = Star("TOI178")
 instrument = Instrument(name="ESPRESSO", version="19", drs_version="latest")
 
-properties = star.fetch_properties()
-
 # Primero se consulta solo la metadata disponible para el objetivo.
 metadata = star.search_observations()
 
 print(star.available_instruments())
 print(star.available_product_types(instrument=instrument))
 print(star.observation_date_range(instrument=instrument))
+print(star.observation_count(instrument=instrument))
 
 # Luego se descargan únicamente los productos seleccionados. Si ya existen en
 # el almacenamiento HDF5 persistente, ExoPy los carga desde ahí sin consultar
