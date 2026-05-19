@@ -103,6 +103,25 @@ def _with_product_metadata(
         product_type=observation.metadata.product_type
         or product.get("file_ext")
         or product.get("file_type"),
+        snr=_first_float(
+            observation.metadata.snr,
+            _product_float(product, ("snr", "SNR", "SNR50")),
+        ),
+        berv=_first_float(
+            observation.metadata.berv,
+            _product_float(product, ("berv", "BERV")),
+        ),
+        airmass=_first_float(
+            observation.metadata.airmass,
+            _product_float(product, ("airmass", "AIRMASS")),
+        ),
+        exposition_time=_first_float(
+            observation.metadata.exposition_time,
+            _product_float(
+                product,
+                ("exposition_time", "exposure_time", "exptime", "EXPTIME"),
+            ),
+        ),
         headers=headers,
     )
     return Observation(metadata=metadata, data=observation.data)
@@ -144,4 +163,23 @@ def _version_from_product(product: dict[str, Any]) -> str | None:
     if product.get("drs_id"):
         return str(product["drs_id"])
 
+    return None
+
+
+def _product_float(product: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = product.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _first_float(*values: float | None) -> float | None:
+    for value in values:
+        if value is not None:
+            return value
     return None

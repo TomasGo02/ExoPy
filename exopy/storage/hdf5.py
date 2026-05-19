@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -122,17 +123,19 @@ def _observation_from_group(
     fallback_target_name: str,
 ) -> Observation:
     arrays = {name: dataset[()] for name, dataset in group["arrays"].items()}
+    source_path = group.attrs.get("source_path", "")
     metadata = ObservationMetadata(
         spectrum_id=group.attrs.get("spectrum_id", observation_id),
         target_name=group.attrs.get("target_name", fallback_target_name),
         instrument_name=group.attrs.get("instrument_name", "unknown"),
         version=group.attrs.get("version"),
         product_type=group.attrs.get("product_type"),
-        headers={
-            "product_id": group.attrs.get("product_id", ""),
-            "file_rootname": group.attrs.get("file_rootname", ""),
-            "date_obs": group.attrs.get("date_obs", ""),
-        },
+        source_path=Path(source_path) if source_path else None,
+        snr=_optional_float(group.attrs.get("snr")),
+        berv=_optional_float(group.attrs.get("berv")),
+        airmass=_optional_float(group.attrs.get("airmass")),
+        exposition_time=_optional_float(group.attrs.get("exposition_time")),
+        headers=_headers_from_group_attrs(group.attrs),
     )
     return Observation(metadata=metadata, data=Data(arrays=arrays))
 
@@ -148,6 +151,10 @@ def _record_from_group(observation_id: str, group: Any) -> dict[str, Any]:
         "file_rootname": group.attrs.get("file_rootname", ""),
         "date_obs": group.attrs.get("date_obs", ""),
         "source_path": group.attrs.get("source_path", ""),
+        "snr": group.attrs.get("snr", ""),
+        "berv": group.attrs.get("berv", ""),
+        "airmass": group.attrs.get("airmass", ""),
+        "exposition_time": group.attrs.get("exposition_time", ""),
     }
 
 
@@ -161,6 +168,11 @@ def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:
         "product_id": str(metadata.headers.get("product_id") or ""),
         "file_rootname": str(metadata.headers.get("file_rootname") or ""),
         "source_path": str(metadata.source_path or ""),
+        "snr": _hdf5_optional_float(metadata.snr),
+        "berv": _hdf5_optional_float(metadata.berv),
+        "airmass": _hdf5_optional_float(metadata.airmass),
+        "exposition_time": _hdf5_optional_float(metadata.exposition_time),
+        "headers_json": json.dumps(_json_safe(metadata.headers)),
         "date_obs": str(
             metadata.headers.get("DATE-OBS")
             or metadata.headers.get("date_obs")
@@ -169,6 +181,51 @@ def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:
             or ""
         ),
     }
+
+
+def _hdf5_optional_float(value: float | None) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _headers_from_group_attrs(attrs: Any) -> dict[str, Any]:
+    headers_json = attrs.get("headers_json")
+    if headers_json:
+        try:
+            headers = json.loads(headers_json)
+        except json.JSONDecodeError:
+            headers = {}
+    else:
+        headers = {}
+
+    headers.setdefault("product_id", attrs.get("product_id", ""))
+    headers.setdefault("file_rootname", attrs.get("file_rootname", ""))
+    headers.setdefault("date_obs", attrs.get("date_obs", ""))
+    return headers
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
 
 
 def _date_from_file_rootname(value: Any) -> str | None:

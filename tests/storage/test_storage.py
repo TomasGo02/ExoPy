@@ -22,6 +22,17 @@ def test_hdf5_store_round_trips_observation(tmp_path):
             instrument_name="ESPRESSO19",
             version="3.0",
             product_type="s1d",
+            snr=42.0,
+            berv=-12.5,
+            airmass=1.23,
+            exposition_time=900.0,
+            headers={
+                "DATE-OBS": "2020-01-02T03:04:05",
+                "hdus": {
+                    "PRIMARY": {"OBJECT": "TOI178"},
+                    "FLUX": {"BUNIT": "electron"},
+                },
+            },
         ),
         data=Data(arrays={"flux": np.array([1.0, 2.0, 3.0])}),
     )
@@ -34,6 +45,13 @@ def test_hdf5_store_round_trips_observation(tmp_path):
     assert loaded[0].metadata.target_name == "TOI/178"
     assert loaded[0].metadata.instrument_name == "ESPRESSO19"
     assert loaded[0].metadata.version == "3.0"
+    assert loaded[0].metadata.snr == 42.0
+    assert loaded[0].metadata.berv == -12.5
+    assert loaded[0].metadata.airmass == 1.23
+    assert loaded[0].metadata.exposition_time == 900.0
+    assert loaded[0].metadata.headers["DATE-OBS"] == "2020-01-02T03:04:05"
+    assert loaded[0].metadata.headers["hdus"]["PRIMARY"]["OBJECT"] == "TOI178"
+    assert loaded[0].metadata.headers["hdus"]["FLUX"]["BUNIT"] == "electron"
     np.testing.assert_allclose(loaded[0].require_data().arrays["flux"], [1.0, 2.0, 3.0])
 
 
@@ -91,6 +109,10 @@ def test_hdf5_store_indexes_observations_by_target_instrument_and_date(tmp_path)
             "file_rootname": "",
             "date_obs": "2020-01-02T03:04:05",
             "source_path": "",
+            "snr": "",
+            "berv": "",
+            "airmass": "",
+            "exposition_time": "",
         }
     ]
     assert store.index_observations(start_date="2021-01-01") == []
