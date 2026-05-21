@@ -11,9 +11,10 @@ def test_processor_normalizes_metadata_and_reports_quality():
             spectrum_id="obs-1",
             target_name=" TOI178 ",
             instrument_name=" ESPRESSO19 ",
+            product_type="S1D_A",
             headers={"DATE-OBS": "2020-01-02T03:04:05"},
         ),
-        data=Data(arrays={"flux": np.array([1.0, np.nan, 3.0])}),
+        data=Data(arrays={"flux": np.array([1.0, np.nan, 3.0])}, data_type="S1D_A"),
     )
     processor = ObservationProcessor()
 
@@ -23,7 +24,9 @@ def test_processor_normalizes_metadata_and_reports_quality():
 
     assert metadata["target_name"] == "TOI178"
     assert metadata["instrument_name"] == "ESPRESSO19"
+    assert metadata["data_type"] == "S1D_A"
     assert metadata["date_obs"] == "2020-01-02T03:04:05"
     assert report.passed is False
     assert report.invalid_counts == {"flux": 1}
     assert converted.require_data().arrays["flux"].flags["C_CONTIGUOUS"]
+    assert converted.require_data().data_type == "S1D_A"

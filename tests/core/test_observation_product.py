@@ -22,6 +22,7 @@ def test_observation_from_product_wraps_dace_metadata():
     assert observation.metadata.target_name == "TOI178"
     assert observation.metadata.instrument_name == "ESPRESSO19"
     assert observation.metadata.product_type == "S1D_A"
+    assert observation.metadata.data_type == "S1D_A"
     assert observation.metadata.version == "3.3.10"
     assert observation.metadata.snr == 120.5
     assert observation.metadata.berv == -4.2

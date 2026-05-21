@@ -93,6 +93,12 @@ def _with_product_metadata(
         return observation
 
     headers = {**product, **observation.metadata.headers}
+    data_type = (
+        observation.metadata.data_type
+        or observation.metadata.product_type
+        or product.get("file_ext")
+        or product.get("file_type")
+    )
     metadata = replace(
         observation.metadata,
         spectrum_id=observation.metadata.spectrum_id or product.get("spectrum_id"),
@@ -103,6 +109,7 @@ def _with_product_metadata(
         product_type=observation.metadata.product_type
         or product.get("file_ext")
         or product.get("file_type"),
+        data_type=data_type,
         snr=_first_float(
             observation.metadata.snr,
             _product_float(product, ("snr", "SNR", "SNR50")),
@@ -124,7 +131,12 @@ def _with_product_metadata(
         ),
         headers=headers,
     )
-    return Observation(metadata=metadata, data=observation.data)
+    data = (
+        replace(observation.data, data_type=observation.data.data_type or data_type)
+        if observation.data is not None
+        else None
+    )
+    return Observation(metadata=metadata, data=data)
 
 
 def _matching_product(

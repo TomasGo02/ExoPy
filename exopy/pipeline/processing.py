@@ -29,6 +29,7 @@ class ObservationProcessor:
             "instrument_name": metadata.instrument_name.strip(),
             "version": metadata.version or "",
             "product_type": metadata.product_type or "",
+            "data_type": metadata.data_type or "",
             "date_obs": metadata.headers.get("DATE-OBS")
             or metadata.headers.get("date_obs")
             or metadata.headers.get("date"),
@@ -60,5 +61,6 @@ class ObservationProcessor:
                 for name, values in data.arrays.items()
             },
             metadata=dict(data.metadata),
+            data_type=data.data_type,
         )
         return Observation(metadata=observation.metadata, data=converted)

@@ -12,6 +12,7 @@ def test_from_fits_loads_metadata_and_arrays(tmp_path):
     primary.header["INSTRUME"] = "ESPRESSO19"
     primary.header["DRS_VER"] = "3.0"
     primary.header["SPECT_ID"] = "obs-1"
+    primary.header["HIERARCH ESO PRO CATG"] = "S1D_A"
     primary.header["EXPTIME"] = 1200.0
     primary.header["HIERARCH ESO OBS AIRM"] = 1.23
     primary.header["HIERARCH ESO OCS EM EXPTIME"] = 900.0
@@ -27,6 +28,8 @@ def test_from_fits_loads_metadata_and_arrays(tmp_path):
     assert observation.target_name == "TOI178"
     assert observation.instrument_name == "ESPRESSO19"
     assert observation.metadata.version == "3.0"
+    assert observation.metadata.product_type == "S1D_A"
+    assert observation.metadata.data_type == "S1D_A"
     assert observation.metadata.source_path == path
     assert observation.metadata.snr == 42.0
     assert observation.metadata.berv == -12.5
@@ -35,6 +38,7 @@ def test_from_fits_loads_metadata_and_arrays(tmp_path):
     assert observation.metadata.headers["OBJECT"] == "TOI178"
     assert observation.metadata.headers["hdus"]["PRIMARY"]["SPECT_ID"] == "obs-1"
     assert observation.metadata.headers["hdus"]["FLUX"]["BUNIT"] == "electron"
+    assert observation.require_data().data_type == "S1D_A"
     np.testing.assert_allclose(observation.require_data().arrays["flux"], [1.0, 2.0, 3.0])
 
 

@@ -17,6 +17,7 @@ class Data:
 
     arrays: dict[str, ArrayLike]
     metadata: dict[str, Any] = field(default_factory=dict)
+    data_type: str | None = None
 
     def copy(self) -> "Data":
         """Return a deep-ish copy of the arrays and metadata dictionary."""
@@ -26,6 +27,7 @@ class Data:
                 for name, values in self.arrays.items()
             },
             metadata=dict(self.metadata),
+            data_type=self.data_type,
         )
 
     def select(self, *columns: str) -> "Data":
@@ -33,6 +35,7 @@ class Data:
         return Data(
             arrays={column: self.arrays[column] for column in columns},
             metadata=dict(self.metadata),
+            data_type=self.data_type,
         )
 
     def apply(self, column: str, transform: Callable[[ArrayLike], ArrayLike]) -> "Data":
@@ -64,6 +67,7 @@ class Data:
         return Data(
             arrays={name: values[mask] for name, values in self.arrays.items()},
             metadata=dict(self.metadata),
+            data_type=self.data_type,
         )
 
     def to_pandas(self):

@@ -19,12 +19,17 @@ class ObservationMetadata:
     instrument_name: str
     version: str | None = None
     product_type: str | None = None
+    data_type: str | None = None
     source_path: Path | None = None
     snr: float | None = None
     berv: float | None = None
     airmass: float | None = None
     exposition_time: float | None = None
     headers: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.data_type is None and self.product_type is not None:
+            object.__setattr__(self, "data_type", self.product_type)
 
 
 @dataclass(slots=True)
@@ -37,12 +42,14 @@ class Observation:
     @classmethod
     def from_product(cls, product: dict[str, Any], target_name: str) -> "Observation":
         """Create a metadata-only observation from a DACE product row."""
+        data_type = product.get("file_ext") or product.get("file_type")
         metadata = ObservationMetadata(
             spectrum_id=product.get("spectrum_id"),
             target_name=target_name,
             instrument_name=str(product.get("instrument_name", "unknown")),
             version=_version_from_product(product),
-            product_type=product.get("file_ext") or product.get("file_type"),
+            product_type=data_type,
+            data_type=data_type,
             snr=_metadata_float(product, _SNR_KEYS),
             berv=_metadata_float(product, _BERV_KEYS),
             airmass=_metadata_float(product, _AIRMASS_KEYS),
@@ -62,13 +69,15 @@ class Observation:
             headers = _headers_from_hdul(hdul)
             arrays = _arrays_from_hdul(hdul)
 
+        data_type = _metadata_value(primary_header, _DATA_TYPE_KEYS)
         metadata = ObservationMetadata(
             spectrum_id=primary_header.get("SPECTRUM")
             or primary_header.get("SPECT_ID"),
             target_name=target_name or primary_header.get("OBJECT", "unknown"),
             instrument_name=primary_header.get("INSTRUME", "unknown"),
             version=primary_header.get("DRS_VER"),
-            product_type=primary_header.get("HIERARCH ESO PRO CATG"),
+            product_type=data_type,
+            data_type=data_type,
             source_path=path,
             snr=_metadata_float(headers, _SNR_KEYS),
             berv=_metadata_float(headers, _BERV_KEYS),
@@ -76,7 +85,10 @@ class Observation:
             exposition_time=_metadata_float(headers, _EXPOSITION_TIME_KEYS),
             headers=headers,
         )
-        return cls(metadata=metadata, data=Data(arrays=arrays, metadata=primary_header))
+        return cls(
+            metadata=metadata,
+            data=Data(arrays=arrays, metadata=primary_header, data_type=data_type),
+        )
 
     @property
     def target_name(self) -> str:
@@ -170,9 +182,22 @@ _EXPOSITION_TIME_KEYS = (
     "exposure_time",
     "exposition_time",
 )
+_DATA_TYPE_KEYS = (
+    "HIERARCH ESO PRO CATG",
+    "ESO PRO CATG",
+    "PRO CATG",
+    "DATA TYPE",
+    "DATA_TYPE",
+    "DATATYPE",
+)
 
 
 def _metadata_float(headers: dict[str, Any], candidates: tuple[str, ...]) -> float | None:
+    value = _metadata_value(headers, candidates)
+    return _as_float(value)
+
+
+def _metadata_value(headers: dict[str, Any], candidates: tuple[str, ...]) -> Any:
     normalized_candidates = [_normalized_header_key(candidate) for candidate in candidates]
     for header in _iter_header_mappings(headers):
         normalized_header = {
@@ -181,8 +206,7 @@ def _metadata_float(headers: dict[str, Any], candidates: tuple[str, ...]) -> flo
         }
         for candidate in normalized_candidates:
             if candidate in normalized_header:
-                value = normalized_header[candidate]
-                return _as_float(value)
+                return normalized_header[candidate]
     return None
 
 

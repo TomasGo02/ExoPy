@@ -17,7 +17,7 @@ class HDF5Store(StorageBackend):
 
     Layout:
         /targets/{target_name}/instruments/{instrument_name}/dates/{date_obs}
-            /observations/{observation_id}/arrays
+            /file_types/{file_type}/observations/{observation_id}/arrays
     """
 
     def __init__(self, path: Path) -> None:
@@ -37,6 +37,7 @@ class HDF5Store(StorageBackend):
             group = h5.require_group(_observation_path(attrs, observation_id))
             group.attrs.update(attrs)
             arrays = group.require_group("arrays")
+            arrays.attrs["data_type"] = data.data_type or metadata.data_type or ""
             for name, values in data.arrays.items():
                 if name in arrays:
                     del arrays[name]
@@ -94,6 +95,7 @@ def _observation_path(attrs: dict[str, str], observation_id: str) -> str:
         f"targets/{_safe_name(attrs['target_name'])}"
         f"/instruments/{_safe_name(attrs['instrument_name'] or 'unknown')}"
         f"/dates/{_safe_name(attrs['date_obs'] or 'unknown')}"
+        f"/file_types/{_safe_name(attrs['product_type'] or 'unknown')}"
         f"/observations/{_safe_name(observation_id)}"
     )
 
@@ -106,10 +108,16 @@ def _iter_observation_groups(root: Any):
             if dates is None:
                 continue
             for _, date_group in dates.items():
+                file_types = date_group.get("file_types")
+                if file_types is not None:
+                    for _, file_type_group in file_types.items():
+                        observations = file_type_group.get("observations")
+                        if observations is not None:
+                            yield from observations.items()
+
                 observations = date_group.get("observations")
-                if observations is None:
-                    continue
-                yield from observations.items()
+                if observations is not None:
+                    yield from observations.items()
         return
 
     observations = root.get("observations")
@@ -130,6 +138,7 @@ def _observation_from_group(
         instrument_name=group.attrs.get("instrument_name", "unknown"),
         version=group.attrs.get("version"),
         product_type=group.attrs.get("product_type"),
+        data_type=group.attrs.get("data_type"),
         source_path=Path(source_path) if source_path else None,
         snr=_optional_float(group.attrs.get("snr")),
         berv=_optional_float(group.attrs.get("berv")),
@@ -137,7 +146,13 @@ def _observation_from_group(
         exposition_time=_optional_float(group.attrs.get("exposition_time")),
         headers=_headers_from_group_attrs(group.attrs),
     )
-    return Observation(metadata=metadata, data=Data(arrays=arrays))
+    return Observation(
+        metadata=metadata,
+        data=Data(
+            arrays=arrays,
+            data_type=group["arrays"].attrs.get("data_type") or metadata.data_type,
+        ),
+    )
 
 
 def _record_from_group(observation_id: str, group: Any) -> dict[str, Any]:
@@ -147,6 +162,7 @@ def _record_from_group(observation_id: str, group: Any) -> dict[str, Any]:
         "instrument_name": group.attrs.get("instrument_name", ""),
         "version": group.attrs.get("version", ""),
         "product_type": group.attrs.get("product_type", ""),
+        "data_type": group.attrs.get("data_type", ""),
         "product_id": group.attrs.get("product_id", ""),
         "file_rootname": group.attrs.get("file_rootname", ""),
         "date_obs": group.attrs.get("date_obs", ""),
@@ -165,6 +181,7 @@ def _hdf5_attrs(metadata: ObservationMetadata) -> dict[str, str]:
         "instrument_name": metadata.instrument_name,
         "version": metadata.version or "",
         "product_type": metadata.product_type or "",
+        "data_type": metadata.data_type or metadata.product_type or "",
         "product_id": str(metadata.headers.get("product_id") or ""),
         "file_rootname": str(metadata.headers.get("file_rootname") or ""),
         "source_path": str(metadata.source_path or ""),
@@ -211,6 +228,7 @@ def _headers_from_group_attrs(attrs: Any) -> dict[str, Any]:
     headers.setdefault("product_id", attrs.get("product_id", ""))
     headers.setdefault("file_rootname", attrs.get("file_rootname", ""))
     headers.setdefault("date_obs", attrs.get("date_obs", ""))
+    headers.setdefault("data_type", attrs.get("data_type", ""))
     return headers
 
 
